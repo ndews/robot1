@@ -4,35 +4,42 @@
 #include <HTTPClient.h>
 #include <WiFi.h>
 
+using namespace audio_tools;
+
+I2SSampler sampler;
+WAVEncoder encoder;
+StreamCopy copier;
 WiFiClient client;
-I2SStream i2s;
-EncodedAudioStream encStream(i2s, new WAVEncoder());
 
 void setupMicStream() {
   AudioLogger::instance().begin(Serial, AudioLogger::Warning);
-  auto cfg = i2s.defaultConfig(RX_MODE);
-  cfg.pin_bclk = 25;
+
+  auto cfg = sampler.defaultConfig(RX_MODE);
+  cfg.pin_bck = 25;
   cfg.pin_ws = 26;
   cfg.pin_data = 34;
   cfg.sample_rate = 16000;
   cfg.bits_per_sample = 16;
-  i2s.begin(cfg);
-  encStream.begin();
+  sampler.begin(cfg);
 }
 
 void streamToWhisper() {
-  uint8_t buffer[4096];
-  int len = encStream.read(buffer, sizeof(buffer));
-  if (len > 0) {
-    HTTPClient http;
-    http.begin("http://192.168.1.100:8080/stt");  // Change IP as needed
-    http.addHeader("Content-Type", "audio/wav");
-    int resp = http.POST(buffer, len);
-    if (resp > 0) {
-      String reply = http.getString();
-      Serial.println("Whisper response: " + reply);
-      // Optionally send to OllamaClient here
-    }
-    http.end();
+  HTTPClient http;
+  http.begin("http://192.168.1.100:8080/stt");
+  http.addHeader("Content-Type", "audio/wav");
+
+  WiFiClient postStream = http.getStream();
+  encoder.begin(postStream);
+  copier.begin(encoder, sampler);
+
+  uint32_t start = millis();
+  while (millis() - start < 3000) {
+    copier.copy();
   }
+
+  encoder.end();
+  int code = http.POST("");
+  String response = http.getString();
+  Serial.println("Whisper replied: " + response);
+  http.end();
 }
